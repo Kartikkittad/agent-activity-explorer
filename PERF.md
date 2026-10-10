@@ -4,6 +4,8 @@
 
 All numbers are from Chrome 1440×900 on my laptop (no CPU throttling), driven by a small Puppeteer script so before and after run exactly the same steps. For page load I emulated Fast 4G (9 Mbps, 40 ms RTT) with the cache disabled. The script reads Chrome's own counters (`Performance.getMetrics` gives `LayoutCount`, `JSEventListeners`, `Nodes`, `ScriptDuration`), the `largest-contentful-paint`, `layout-shift` and `longtask` PerformanceObservers, and `performance.now()` around the functions in question with a forced layout at the end so layout cost is included.
 
+The script is in [docs/perf/measure.js](docs/perf/measure.js) (needs `puppeteer-core` and a local Chrome: `node docs/perf/measure.js http://localhost:5174/`). Performance traces of the same scroll before and after are in `docs/perf/*.trace.json.gz`, and you can open them with DevTools → Performance → Load profile.
+
 | | Before | After |
 |---|---|---|
 | First / largest contentful paint (Fast 4G) | 11.1 s / 14.4 s | 2.5 s / 2.5 s |
@@ -36,6 +38,7 @@ All numbers are from Chrome 1440×900 on my laptop (no CPU throttling), driven b
 - **Root cause:** On every scroll event (not once per frame) it removed a class from a row and then read that row's position, 200 times, which forces a layout each time. Then it filtered all 100,000 events, creating a `Date` per event, just to count calls in one minute (486 ms on its own). It also changed the topbar's `padding` on every pixel scrolled, which re-lays-out the whole page, and the progress bar animated `width`.
 - **Fix:** Replaced the row measuring with an `IntersectionObserver` on the 30–60% band of the viewport, so the browser tells us which rows are in focus. Pre-computed a `Map` of calls per minute at startup. The remaining scroll work (progress bar, topbar, back-to-top) is batched into one `requestAnimationFrame` per frame, the progress bar uses `transform: scaleX`, and the topbar padding changes once via the `topbar-raised` class. The listener is `passive`. The focus highlight uses an inset `box-shadow` instead of a border plus padding, so toggling it doesn't change layout.
 - **Before / after:** median scroll step 1,020 ms → 18 ms (p95 1,171 → 21 ms). Layouts per 60 steps 1,256 → 118.
+- **Traces:** [before](docs/perf/before-scroll.trace.json.gz) / [after](docs/perf/after-scroll.trace.json.gz) (15 wheel ticks over the list).
 
 ### 4. Images are 6 MB and much bigger than they are displayed
 - **Symptom:** On a normal connection the hero takes ~14 s to appear and the page feels empty for a long time.
@@ -71,6 +74,13 @@ All numbers are from Chrome 1440×900 on my laptop (no CPU throttling), driven b
 - **Root cause:** Animating `left` changes the element's geometry, so the browser has to run layout and paint on every frame.
 - **Fix:** Animate `transform: translateX()` instead, using container query units (`cqw`) to keep the same start and end positions. Transforms are handled by the compositor without layout. Also stopped the animation for `prefers-reduced-motion`.
 - **Before / after:** layouts in 3 s of idle 180 → 0, style recalcs 180 → 0.
+- **Paint flashing** (Chrome's Rendering overlay, idle page). Before: the alerts bar flashes green because it repaints every frame:
+
+  ![Before: alerts bar repainting](docs/perf/before-idle-paint-flashing.jpg)
+
+  After: no repaint, and the text moves on the compositor:
+
+  ![After: no repaint](docs/perf/after-idle-paint-flashing.jpg)
 
 ### 9. Agent cards equalized with JavaScript
 - **Symptom:** The agent grid jumps around while the avatars load and on resize.
